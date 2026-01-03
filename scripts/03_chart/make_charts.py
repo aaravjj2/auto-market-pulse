@@ -51,6 +51,43 @@ def make_candlestick(df, symbol, outpath, figsize=(4.8, 8.533)):
         # fallback to simple mplfinance save
         mpf.plot(dfc, type="candle", style=style, volume=False, show_nontrading=False, savefig=dict(fname=outpath, dpi=150), figsize=figsize)
 
+    # Post-processing annotations: mark last MA crossover and volume spikes
+    try:
+        # compute moving averages directly
+        ma20 = dfc['close'].rolling(window=20, min_periods=1).mean()
+        ma50 = dfc['close'].rolling(window=50, min_periods=1).mean()
+        sig = np.sign(ma20 - ma50)
+        cross = np.where(np.diff(sig) != 0)[0]
+        if len(cross) > 0:
+            last_idx = cross[-1] + 1
+            dt = dfc.index[last_idx]
+            price = dfc['close'].iloc[last_idx]
+            ax_price = axes[0]
+            ax_price.annotate('MA crossover', xy=(dt, price), xytext=(dt, price * 1.02), arrowprops=dict(facecolor='yellow', shrink=0.05), color='yellow', fontsize=10, weight='bold')
+            # vertical line on both axes to highlight event
+            for ax in axes:
+                try:
+                    ax.axvline(dt, color='yellow', linestyle='--', linewidth=1, alpha=0.6)
+                except Exception:
+                    pass
+
+        # volume spikes: mark days where volume > 2x 20-day avg
+        vol20 = dfc['volume'].rolling(window=20, min_periods=1).mean()
+        spikes = dfc.index[(dfc['volume'] > 2 * vol20)]
+        if len(spikes) > 0:
+            for sp in spikes[-3:]:
+                for ax in axes[-1:]:
+                    try:
+                        ax.axvline(sp, color='red', linestyle=':', linewidth=1.2, alpha=0.7)
+                    except Exception:
+                        pass
+        # re-save the annotated figure (overwrite)
+        fig.savefig(outpath, dpi=150, bbox_inches='tight')
+        plt.close(fig)
+    except Exception:
+        # non-fatal
+        pass
+
 
 def make_pct_chart(df, symbol, outpath, days=5, figsize=(4.8, 2.5)):
     sdf = df[df["symbol"] == symbol].sort_values("timestamp").tail(days)

@@ -24,9 +24,12 @@ def main():
     outdir = os.path.join('output', 'smoke_test')
     run(f'python scripts/02_analyze/generate_story.py --cache {cache_path} --output {outdir}/story.json')
     run(f'python scripts/03_chart/make_charts.py --story {outdir}/story.json --cache {cache_path} --outdir {outdir}/charts')
+    # detect signals and generate titles
+    run(f'python scripts/08_signals/detect_signals.py --cache {cache_path} --outdir {outdir}/signals')
+    run(f'python scripts/08_signals/generate_title.py --signals {outdir}/signals/signals.json --out {outdir}/signals/title.json')
     run(f'python scripts/04_render/render_video.py --story {outdir}/story.json --chart_meta {outdir}/charts/chart_meta.json --outdir {outdir}/video')
     run(f'python scripts/06_assets/make_thumbnail.py --chart {outdir}/charts/scene_01_SPY_price.png --headline "Smoke Test" --output {outdir}/thumbnail.png')
-    run(f'python scripts/06_assets/generate_srt.py --story {outdir}/story.json --output {outdir}/captions.srt')
+    run(f'python scripts/06_assets/generate_ass.py --story {outdir}/story.json --timing templates/video_timing_short.json --output {outdir}/captions.ass')
     print('SMOKE TEST COMPLETE')
 
 if __name__ == '__main__':
