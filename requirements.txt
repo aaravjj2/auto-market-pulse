@@ -1,0 +1,13 @@
+pandas
+yfinance
+pandas_ta
+matplotlib
+mplfinance
+plotly
+moviepy
+Pillow
+requests
+PyYAML
+pytest
+python-dotenv
+ffmpeg-python
