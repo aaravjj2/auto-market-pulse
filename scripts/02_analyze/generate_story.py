@@ -11,6 +11,9 @@ from datetime import datetime
 
 import numpy as np
 import pandas as pd
+import importlib.util
+import sys
+from pathlib import Path
 
 
 def load_cache(path):
@@ -79,7 +82,8 @@ def generate_story(df, symbols, days=5):
         if spy and r["symbol"] != "SPY":
             rel = r["pct_change"] - spy["pct_change"]
             text += f" (vs SPY {rel:+.2f}%)"
-        bullets.append({"text": text})
+        # attach symbol for downstream rendering
+        bullets.append({"symbol": r["symbol"], "text": text})
 
     title = f"Market Pulse — {datetime.now().strftime('%b %d, %Y')}"
     summary = " | ".join([f"{r['symbol']} {r['pct_change']:+.2f}%" for r in records[:4]])
@@ -88,8 +92,36 @@ def generate_story(df, symbols, days=5):
         "type": "market_pulse",
         "title": title,
         "bullets": bullets,
+        "records": records,
+        "signals": [],
         "summary_tweet": f"{summary} — snapshot",
     }
+    # Attempt to enrich with signals from scripts/08_signals/detect_signals.py
+    try:
+        mod_path = Path(__file__).parent.parent / "scripts" / "08_signals" / "detect_signals.py"
+        if mod_path.exists():
+            spec = importlib.util.spec_from_file_location("detect_signals", str(mod_path))
+            ds = importlib.util.module_from_spec(spec)
+            sys.modules["detect_signals"] = ds
+            spec.loader.exec_module(ds)
+            # build per-symbol DataFrame and call detect_for_ticker
+            for r in records:
+                sym = r["symbol"]
+                sdf = df[df["symbol"] == sym].sort_values("timestamp")
+                try:
+                    sig = ds.detect_for_ticker(sdf.rename(columns={"timestamp": "date", "close": "close", "volume": "volume"}), sym, spy_df=None)
+                    if sig and sig.get("signals"):
+                        story["signals"].append(sig)
+                        # attach signals to bullet if matches
+                        for b in story["bullets"]:
+                            if b.get("symbol") == sym:
+                                b.setdefault("signals", []).extend(sig.get("signals", []))
+                except Exception:
+                    continue
+    except Exception:
+        # best-effort only; do not fail story generation
+        pass
+
     return story
 
 

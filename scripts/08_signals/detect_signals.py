@@ -7,6 +7,8 @@ import argparse
 import json
 import os
 import pandas as pd
+import importlib.util
+from pathlib import Path
 
 
 def rolling_ma(series, window):
@@ -54,6 +56,26 @@ def detect_for_ticker(df, ticker, spy_df=None):
                 "type": "divergence",
                 "diff_pct": round(diff, 2),
                 "narrative": f"{ticker} has diverged from SPY by {diff:.2f}% this week."})
+
+    # Try to enrich with StockTwits sentiment if available
+    try:
+        mod_path = Path(__file__).parent / "stocktwits_sentiment.py"
+        if mod_path.exists():
+            spec = importlib.util.spec_from_file_location("st_sent", str(mod_path))
+            st_mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(st_mod)
+            sent = st_mod.get_sentiment(ticker)
+            out["sentiment"] = sent
+            if sent.get("total", 0) >= 5 and sent.get("bull", 0) - sent.get("bear", 0) >= 3:
+                out["signals"].append({
+                    "type": "sentiment_bull",
+                    "narrative": f"Social buzz on {ticker} is unusually high (Bullish mentions > Bearish)."})
+            elif sent.get("total", 0) >= 5 and sent.get("bear", 0) - sent.get("bull", 0) >= 3:
+                out["signals"].append({
+                    "type": "sentiment_bear",
+                    "narrative": f"Social buzz on {ticker} is leaning bearish."})
+    except Exception:
+        pass
 
     return out
 
