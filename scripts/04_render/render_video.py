@@ -31,6 +31,25 @@ def draw_caption(infile, text, outfile, fontsize=40):
     y = h - margin - fontsize * 2
     draw.rectangle([(0, y - 10), (w, h)], fill=(0, 0, 0, 140))
     draw.text((x, y), text, font=font, fill=(255, 255, 255, 255))
+    # leave space for optional badge drawn by caller: if outfile filename contains '__badge__', draw it
+    if "__badge__" in outfile:
+        try:
+            badge = outfile.split("__badge__", 1)[1]
+            # truncate
+            badge = badge.replace('.jpg', '')[:40]
+            bx = w - 20
+            by = 40
+            bw = 420
+            bh = 80
+            # badge background
+            draw.rounded_rectangle([(bx - bw, by - 10), (bx, by + bh)], radius=12, fill=(220, 50, 50, 220))
+            try:
+                bf = ImageFont.truetype("DejaVuSans-Bold.ttf", 26)
+            except Exception:
+                bf = ImageFont.load_default()
+            draw.text((bx - bw + 18, by + 10), badge, font=bf, fill=(255, 255, 255, 255))
+        except Exception:
+            pass
     out = Image.alpha_composite(img, txt_layer)
     out.convert("RGB").save(outfile, quality=90)
 
@@ -44,13 +63,12 @@ def main(args):
     with open(args.timing) as f:
         timing = json.load(f)
 
-    # For mapping symbol -> bullet text, use first matching bullet per symbol
-    symbol_text = {}
+    # For mapping symbol -> bullet dict (text + signals)
+    symbol_map = {}
     for b in story.get("bullets", []):
-        t = b.get("text", "")
-        parts = t.split()
-        if parts:
-            symbol_text[parts[0]] = t
+        sym = b.get("symbol") or (b.get("text", "").split()[0] if b.get("text") else None)
+        if sym:
+            symbol_map[sym] = b
 
     tmp_dir = os.path.join(args.outdir, "_tmp")
     ensure_dir(tmp_dir)
@@ -80,8 +98,17 @@ def main(args):
     for s in meta.get("scenes", []):
         img_file = s.get("file")
         sym = s.get("symbol")
-        caption = symbol_text.get(sym, story.get("title", ""))
+        bullet = symbol_map.get(sym, {})
+        caption = bullet.get("text") or story.get("title", "")
+        # badge text if signals exist
+        badge = None
+        if bullet.get("signals"):
+            badge = bullet["signals"][0].get("narrative")
         outname = os.path.join(tmp_dir, f"frame_{idx:04d}.jpg")
+        # if badge, encode into filename so draw_caption can optionally render it
+        if badge:
+            safe = badge.replace(' ', '_').replace('/', '_')
+            outname = outname.replace('.jpg', f"__badge__{safe}.jpg")
         draw_caption(img_file, caption, outname)
         seq_files.append((outname, scene_sec))
         idx += 1
@@ -112,7 +139,28 @@ def main(args):
         # ffmpeg concat demuxer requires last file listed twice for correct duration
         f.write(f"file '{seq_files[-1][0]}'\n")
 
-    outname = os.path.join(args.outdir, f"short_market_pulse_{datetime.now().strftime('%Y%m%d')}.mp4")
+    # try to use generated title if available (signals/title.json near story)
+    outname_title = None
+    try:
+        story_dir = os.path.dirname(os.path.abspath(args.story))
+        title_path = os.path.join(story_dir, "signals", "title.json")
+        if os.path.exists(title_path):
+            with open(title_path) as tf:
+                tj = json.load(tf)
+                cand = tj.get("candidates", [])
+                if cand:
+                    outname_title = cand[0].get("title")
+    except Exception:
+        outname_title = None
+
+    if outname_title:
+        # sanitize for filename
+        slug = ''.join([c for c in outname_title if c.isalnum() or c in (' ', '-', '_')]).rstrip()
+        slug = slug.replace(' ', '_')[:80]
+        outname = os.path.join(args.outdir, f"short_market_pulse_{datetime.now().strftime('%Y%m%d')}_{slug}.mp4")
+        intro_txt = outname_title
+    else:
+        outname = os.path.join(args.outdir, f"short_market_pulse_{datetime.now().strftime('%Y%m%d')}.mp4")
     # try to find a bundled ffmpeg (imageio_ffmpeg) before falling back to system ffmpeg
     try:
         from imageio_ffmpeg import get_ffmpeg_exe

@@ -9,6 +9,18 @@ import os
 import pandas as pd
 import importlib.util
 from pathlib import Path
+import math
+
+# load config if present
+CONFIG_PATH = Path(__file__).parent / "signals_config.json"
+if CONFIG_PATH.exists():
+    try:
+        with open(CONFIG_PATH) as cf:
+            CFG = json.load(cf)
+    except Exception:
+        CFG = {}
+else:
+    CFG = {}
 
 
 def rolling_ma(series, window):
@@ -18,28 +30,41 @@ def rolling_ma(series, window):
 def detect_for_ticker(df, ticker, spy_df=None):
     out = {"ticker": ticker, "signals": []}
     s = df.copy()
-    s["ma20"] = rolling_ma(s["close"], 20)
-    s["ma50"] = rolling_ma(s["close"], 50)
+    short = int(CFG.get("ma_short", 20))
+    long = int(CFG.get("ma_long", 50))
+    s["ma_short"] = rolling_ma(s["close"], short)
+    s["ma_long"] = rolling_ma(s["close"], long)
     s["vol20"] = rolling_ma(s["volume"], 20)
 
     if len(s) < 3:
         return out
 
     # Moving average crossover (recent)
-    if s["ma20"].iat[-1] > s["ma50"].iat[-1] and s["ma20"].iat[-2] <= s["ma50"].iat[-2]:
-        out["signals"].append({
-            "type": "ma_crossover",
-            "dir": "bullish",
-            "narrative": f"Signal Alert — {ticker} Momentum Flip!"});
-    elif s["ma20"].iat[-1] < s["ma50"].iat[-1] and s["ma20"].iat[-2] >= s["ma50"].iat[-2]:
-        out["signals"].append({
-            "type": "ma_crossover",
-            "dir": "bearish",
-            "narrative": f"Signal Alert — {ticker} Momentum Flip (bearish)!"});
+    # MA crossover using configured windows
+    try:
+        cur_short = s[f"ma_short"].iat[-1]
+        prev_short = s[f"ma_short"].iat[-2]
+        cur_long = s[f"ma_long"].iat[-1]
+        prev_long = s[f"ma_long"].iat[-2]
+        if cur_short > cur_long and prev_short <= prev_long:
+            out["signals"].append({
+                "type": "ma_crossover",
+                "dir": "bullish",
+                "narrative": f"Signal Alert — {ticker} Momentum Flip!"})
+        elif cur_short < cur_long and prev_short >= prev_long:
+            out["signals"].append({
+                "type": "ma_crossover",
+                "dir": "bearish",
+                "narrative": f"Signal Alert — {ticker} Momentum Flip (bearish)!"})
+    except Exception:
+        pass
 
     # Volume spike (last bar vs 20-day avg)
     vol_ratio = float(s["volume"].iat[-1] / max(1, s["vol20"].iat[-1]))
-    if vol_ratio >= 2.0:
+    vol_thresh = float(CFG.get("volume_spike_multiplier", 2.0))
+    if not math.isfinite(vol_ratio):
+        vol_ratio = 1.0
+    if vol_ratio >= vol_thresh:
         out["signals"].append({
             "type": "volume_spike",
             "vol_ratio": round(vol_ratio, 2),
@@ -66,11 +91,13 @@ def detect_for_ticker(df, ticker, spy_df=None):
             spec.loader.exec_module(st_mod)
             sent = st_mod.get_sentiment(ticker)
             out["sentiment"] = sent
-            if sent.get("total", 0) >= 5 and sent.get("bull", 0) - sent.get("bear", 0) >= 3:
+            min_msgs = int(CFG.get("volume_min_messages_for_sentiment", 5))
+            delta_th = int(CFG.get("sentiment_delta_threshold", 3))
+            if sent.get("total", 0) >= min_msgs and sent.get("bull", 0) - sent.get("bear", 0) >= delta_th:
                 out["signals"].append({
                     "type": "sentiment_bull",
                     "narrative": f"Social buzz on {ticker} is unusually high (Bullish mentions > Bearish)."})
-            elif sent.get("total", 0) >= 5 and sent.get("bear", 0) - sent.get("bull", 0) >= 3:
+            elif sent.get("total", 0) >= min_msgs and sent.get("bear", 0) - sent.get("bull", 0) >= delta_th:
                 out["signals"].append({
                     "type": "sentiment_bear",
                     "narrative": f"Social buzz on {ticker} is leaning bearish."})
@@ -97,20 +124,35 @@ def main():
             if fn.lower().endswith(".csv"):
                 t = os.path.splitext(fn)[0]
                 try:
-                    df = pd.read_csv(os.path.join(cache, fn), parse_dates=["date"]).sort_values("date")
-                    tickers[t] = df
+                    df = pd.read_csv(os.path.join(cache, fn))
+                    # support either 'date' or 'timestamp' column names
+                    if "date" not in df.columns and "timestamp" in df.columns:
+                        df["date"] = pd.to_datetime(df["timestamp"])
+                    elif "date" in df.columns:
+                        df["date"] = pd.to_datetime(df["date"])
+                    tickers[t] = df.sort_values("date")
                 except Exception:
                     continue
     else:
         # single CSV; assume contains a ticker column
-        df_all = pd.read_csv(cache, parse_dates=["date"]) if os.path.exists(cache) else pd.DataFrame()
+        df_all = pd.read_csv(cache) if os.path.exists(cache) else pd.DataFrame()
         if "ticker" in df_all.columns:
             for t, g in df_all.groupby("ticker"):
-                tickers[t] = g.sort_values("date")
+                gg = g.copy()
+                if "date" not in gg.columns and "timestamp" in gg.columns:
+                    gg["date"] = pd.to_datetime(gg["timestamp"])
+                elif "date" in gg.columns:
+                    gg["date"] = pd.to_datetime(gg["date"])
+                tickers[t] = gg.sort_values("date")
         else:
             # place under filename
             t = os.path.splitext(os.path.basename(cache))[0]
-            tickers[t] = df_all.sort_values("date")
+            dfc = df_all.copy()
+            if "date" not in dfc.columns and "timestamp" in dfc.columns:
+                dfc["date"] = pd.to_datetime(dfc["timestamp"])
+            elif "date" in dfc.columns:
+                dfc["date"] = pd.to_datetime(dfc["date"])
+            tickers[t] = dfc.sort_values("date")
 
     spy_df = tickers.get(args.spy)
 

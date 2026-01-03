@@ -1,0 +1,12 @@
+{
+  "ma_short": 20,
+  "ma_long": 50,
+  "volume_spike_multiplier": 2.0,
+  "volume_min_messages_for_sentiment": 5,
+  "sentiment_delta_threshold": 3,
+  "title_templates": [
+    "📊 {headline} — Here’s What That Means (30s)",
+    "⚠️ {headline} — Quick Breakdown",
+    "🔥 {headline} — Short Summary"
+  ]
+}
