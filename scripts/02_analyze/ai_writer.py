@@ -1,10 +1,7 @@
 """AI Writer + Critic (Critic-Refiner) loop for the cognitive layer.
 
-This script queries a local Ollama instance to generate a market story JSON
-matching the `generate_story.py` output schema. It implements a Writer agent
-and a Critic agent in a loop: generate -> critique -> refine (up to max_iters).
-
-Defaults to model 'llama3' but accepts `--model` to override.
+HYBRID STRATEGY: Supports both OpenRouter API (primary) and local Ollama (fallback).
+Returns script_text and visual_scenes for asset selection.
 """
 from __future__ import annotations
 
@@ -24,6 +21,8 @@ import requests
 
 OLLAMA_BASE = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 DEFAULT_MODEL = os.environ.get("OLLAMA_MODEL", "llama3")
+OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
+OPENROUTER_MODEL = "meta-llama/llama-3.3-70b-instruct:free"
 
 
 def load_cache(path: str) -> pd.DataFrame:
@@ -79,6 +78,39 @@ def build_records(df: pd.DataFrame, symbols: List[str], days: int = 5) -> List[D
     return records
 
 
+def call_openrouter(messages: List[Dict[str, str]], model: str = OPENROUTER_MODEL, timeout: int = 60) -> str:
+    """Call OpenRouter API for script generation.
+    
+    Returns the text content of the response.
+    """
+    if not OPENROUTER_API_KEY:
+        raise RuntimeError("OPENROUTER_API_KEY not set")
+    
+    url = "https://openrouter.ai/api/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://github.com/auto-market-pulse",
+        "X-Title": "Auto Market Pulse"
+    }
+    payload = {
+        "model": model,
+        "messages": messages,
+        "temperature": 0.2,
+        "max_tokens": 2048
+    }
+    
+    try:
+        r = requests.post(url, json=payload, headers=headers, timeout=timeout)
+        if r.status_code == 200:
+            j = r.json()
+            if isinstance(j, dict) and "choices" in j and j["choices"]:
+                return j["choices"][0].get("message", {}).get("content", "")
+        raise RuntimeError(f"OpenRouter API returned status {r.status_code}: {r.text}")
+    except requests.exceptions.RequestException as e:
+        raise RuntimeError(f"Failed to call OpenRouter API: {e}")
+
+
 def call_ollama(messages: List[Dict[str, str]], model: str = DEFAULT_MODEL, timeout: int = 60, temperature: float = 0.2, max_tokens: int = 512) -> str:
     """Call Ollama's /api/chat endpoint, fallback to /api/generate.
 
@@ -91,7 +123,6 @@ def call_ollama(messages: List[Dict[str, str]], model: str = DEFAULT_MODEL, time
         r = requests.post(url, json=payload, timeout=timeout)
         if r.status_code == 200:
             j = r.json()
-            # Ollama chat: choices -> message -> content
             if isinstance(j, dict) and "choices" in j and j["choices"]:
                 return j["choices"][0].get("message", {}).get("content", "")
             return j.get("text", "") or json.dumps(j)
@@ -112,7 +143,46 @@ def call_ollama(messages: List[Dict[str, str]], model: str = DEFAULT_MODEL, time
     raise RuntimeError("Ollama did not return a usable response")
 
 
-# --- Prompts derived from the architecture spec (Section 5) ---
+def call_llm_hybrid(messages: List[Dict[str, str]], model: Optional[str] = None, timeout: int = 60) -> str:
+    """Hybrid LLM caller: Try OpenRouter first, fallback to Ollama.
+    
+    Args:
+        messages: List of message dicts with 'role' and 'content'
+        model: Optional model override (ignored for OpenRouter, used for Ollama)
+        timeout: Request timeout
+        
+    Returns:
+        Response text from LLM
+    """
+    # Try OpenRouter first if API key is available
+    if OPENROUTER_API_KEY:
+        try:
+            print("Attempting OpenRouter API...", file=sys.stderr)
+            return call_openrouter(messages, timeout=timeout)
+        except Exception as e:
+            print(f"OpenRouter failed: {e}, falling back to Ollama...", file=sys.stderr)
+    
+    # Fallback to Ollama
+    print("Using local Ollama...", file=sys.stderr)
+    ollama_model = model or DEFAULT_MODEL
+    return call_ollama(messages, model=ollama_model, timeout=timeout, max_tokens=2048)
+
+
+# --- Prompts for Hybrid Strategy ---
+WRITER_PROMPT_HYBRID = (
+    "System: You are a Writer agent for short-form financial video narration.\n"
+    "Goal: Generate a compelling script with visual scene mappings.\n"
+    "Output Format: Return a JSON object with these keys:\n"
+    "- 'script_text': The full spoken script text (word-for-word transcript)\n"
+    "- 'visual_scenes': Array of scene objects, each with:\n"
+    "  * 'start': Start time in seconds (float)\n"
+    "  * 'end': End time in seconds (float)\n"
+    "  * 'filename': Background video filename (e.g., 'vintage_1970s_home.mp4', 'money_printer_brrr.mp4')\n"
+    "  * 'search_query': Optional search query for asset generation (if filename not provided)\n"
+    "The script_text should be approximately 140-160 words for a 60-second video.\n"
+    "Visual scenes should cover the entire script duration with appropriate transitions."
+)
+
 WRITER_PROMPT = (
     "System: You are the Writer agent for short-form financial video narration.\n"
     "Goal: Convert the provided numerical 'records' into a concise, visual, and hook-driven 'market_pulse' story JSON.\n"
@@ -124,31 +194,22 @@ WRITER_PROMPT = (
     "Tone: punchy, vivid, and optimized for 9:16 short videos."
 )
 
-# Additional production-grade constraints (Section 7.2 override):
-# The Writer MUST produce spoken, word-for-word transcript content inside the
-# `bullets` array in three blocks: Hook, Evidence, Loop. Enforce strict word
-# counts and structure for 60s videos.
-#
-# Constraints (must be enforced):
-# - TOTAL WORDS: MUST be between 140 and 160 words. Anything less than 130 words
-#   is a FAILURE and should be flagged for immediate rewrite.
-# - STRUCTURE: bullets must contain exactly three entries in order:
-#   1) Hook (one sentence) — immediate pattern interrupt.
-#   2) Evidence (the meat): at least 100 words, must include specific numbers/dates
-#      (e.g., "1970", "40%", "$23,000"). This is the spoken narrative body.
-#   3) Loop (one sentence): connects back to the Hook and closes the transcript.
-# - SYSTEM NOTE: You are not writing a summary. You are writing the full,
-#   word-for-word spoken transcript. Do not use placeholders or bracketed tokens.
-# - Output formatting: still return valid `market_pulse` JSON where `bullets`
-#   holds these three transcript blocks as `{"symbol": "M2", "text": "..."}`.
-
-
 CRITIC_PROMPT = (
     "System: You are the Critic agent. Given a Writer draft (JSON or text), score and provide concise, actionable feedback.\n"
     "Score on 4 axes (0-10): Hook Velocity, Rhythm, Visualizability, Loop Factor.\n"
     "Return a JSON object: {\"score\": <avg 0-10>, \"components\": {\"hook\":n,\"rhythm\":n,\"visual\":n,\"loop\":n}, \"feedback\": \"...\"}.\n"
     "Feedback must be actionable: suggest changes to hook, phrasing, or ending to improve Loop Factor."
 )
+
+
+def ask_writer_hybrid(prompt_text: str) -> Dict[str, Any]:
+    """Ask writer to generate script with visual scenes using hybrid LLM."""
+    messages = [
+        {"role": "system", "content": WRITER_PROMPT_HYBRID},
+        {"role": "user", "content": f"Generate a script for this topic:\n{prompt_text}\n\nReturn the JSON object with script_text and visual_scenes."},
+    ]
+    response = call_llm_hybrid(messages)
+    return extract_json(response) or {}
 
 
 def ask_writer(records: List[Dict[str, Any]], model: str, temperature: float, max_tokens: int) -> str:
@@ -217,11 +278,10 @@ def extract_visual_keywords(story_text: str, model: str = DEFAULT_MODEL) -> List
             {"role": "system", "content": keyword_prompt},
             {"role": "user", "content": f"Story text:\n{story_text}\n\nReturn the 3 keywords as JSON array:"},
         ]
-        response = call_ollama(messages, model=model, temperature=0.1, max_tokens=100)
+        response = call_llm_hybrid(messages)
         
         # Try to parse JSON array
         response = response.strip()
-        # Remove markdown code blocks if present
         if response.startswith("```"):
             response = response.split("```")[1]
             if response.startswith("json"):
@@ -235,7 +295,6 @@ def extract_visual_keywords(story_text: str, model: str = DEFAULT_MODEL) -> List
         except Exception:
             pass
         
-        # Fallback: try to extract from response text
         keywords = re.findall(r'"([^"]+)"', response)
         if len(keywords) >= 3:
             return [k.lower().strip() for k in keywords[:3]]
@@ -243,7 +302,7 @@ def extract_visual_keywords(story_text: str, model: str = DEFAULT_MODEL) -> List
     except Exception as e:
         print(f"Warning: Failed to extract keywords: {e}", file=sys.stderr)
     
-    # Ultimate fallback: extract common financial terms
+    # Ultimate fallback
     text_lower = story_text.lower()
     fallback_keywords = []
     common_terms = ["money", "inflation", "crisis", "housing", "market", "stock", "dollar", "fed", "economy", "price"]
@@ -251,7 +310,6 @@ def extract_visual_keywords(story_text: str, model: str = DEFAULT_MODEL) -> List
         if term in text_lower and len(fallback_keywords) < 3:
             fallback_keywords.append(term)
     
-    # Pad to 3 if needed
     while len(fallback_keywords) < 3:
         fallback_keywords.append("market")
     
@@ -278,7 +336,6 @@ def critic_refiner_loop(records: List[Dict[str, Any]], model: str, temperature: 
         if draft is None:
             draft = ask_writer(records, model=model, temperature=temperature, max_tokens=max_tokens)
         else:
-            # send previous draft + critic feedback as instruction to refine
             refine_msg = "Refine this draft using previous feedback. Previous draft:\n" + draft
             draft = call_ollama([{"role": "system", "content": WRITER_PROMPT}, {"role": "user", "content": refine_msg}], model=model, temperature=temperature, max_tokens=max_tokens)
 
@@ -293,16 +350,14 @@ def critic_refiner_loop(records: List[Dict[str, Any]], model: str, temperature: 
             candidate.setdefault("type", "market_pulse")
         else:
             candidate = fallback_story(records)
-        # Validate Writer constraints (production requirements)
+        
         def words_count(s: str) -> int:
             return len(re.findall(r"\w+", s or ""))
 
         def validate_candidate(cand: Dict[str, Any]) -> Optional[str]:
-            # Expect bullets array with exactly three blocks
             bullets = cand.get("bullets") or []
             if not isinstance(bullets, list) or len(bullets) < 3:
                 return "Draft must contain three bullets: Hook, Evidence, Loop."
-            # join texts
             hook = bullets[0].get("text", "") if len(bullets) > 0 else ""
             evidence = bullets[1].get("text", "") if len(bullets) > 1 else ""
             loop = bullets[2].get("text", "") if len(bullets) > 2 else ""
@@ -313,7 +368,6 @@ def critic_refiner_loop(records: List[Dict[str, Any]], model: str, temperature: 
                 return f"Total words {total} not in required 140-160 range."
             if words_count(evidence) < 100:
                 return f"Evidence block too short ({words_count(evidence)} words). Must be >=100 words."
-            # check evidence contains numbers/dates
             if not re.search(r"\b(19|20)\d{2}\b|\b\d+%\b|\$\s*\d{1,3}(?:,\d{3})*\b", evidence):
                 return "Evidence block must include specific numbers/dates (e.g., '1970', '40%', '$23,000')."
             return None
@@ -321,16 +375,13 @@ def critic_refiner_loop(records: List[Dict[str, Any]], model: str, temperature: 
         validation_error = validate_candidate(candidate)
         last_candidate = candidate
 
-        # If critic score is high and validation passes, accept candidate
         if score >= 8.0 and validation_error is None:
             return candidate
 
-        # Prefer critic feedback but append explicit validation feedback when present
         feedback = critic.get("feedback", "Improve hooks, rhythm, visual cues, loop.")
         if validation_error:
             feedback = (feedback + " | VALIDATION: " + validation_error).strip()
 
-        # attach feedback into next draft request
         draft = json.dumps({"refine_feedback": feedback, "previous_draft": draft})
         time.sleep(0.3)
 
@@ -364,7 +415,7 @@ def main():
         json.dump(story, f, indent=2)
     print("Wrote story:", args.output)
     
-    # Phase 1: Generate visual keywords and save metadata
+    # Generate visual keywords and save metadata
     script_text = story.get("title", "") + " " + " ".join([b.get("text", "") for b in story.get("bullets", [])])
     try:
         visual_keywords = extract_visual_keywords(script_text, model=args.model)

@@ -1,9 +1,26 @@
 {
-  "title": "Market Pulse \u2014 Jan 05, 2026",
-  "script": "Market Pulse \u2014 Jan 05, 2026 AAPL closed -0.87% at $271.01 GLD closed -4.43% at $398.28 MSFT closed -3.03% at $472.94 NVDA closed -0.88% at $188.85 SLV closed -7.55% at $65.75 SPY closed -1.03% at $683.17",
-  "visual_keywords": [
-    "market",
-    "market",
-    "market"
+  "title": "Why Your Dollar Is Dying",
+  "script_text": "You are working for free. You just don't know it yet. In 1970, the average American home cost twenty-three thousand dollars. Today, it is over four hundred thousand. Did houses get twenty times better? No. Your money got twenty times worse. Look at the chart behind me. This is the M2 Money Supply. See this vertical line in 2020? The government printed forty percent of all US dollars in existence in just twelve months. This isn't inflation; it is mathematical theft. When they double the supply of money, they cut the value of your labor in half. The wealthy understand this game. They don't hoard cash; they hoard assets like gold, real estate, and stocks. They borrow cheap money to buy appreciating assets, while you work harder for currency that buys less. The system is designed to punish savers and reward debtors. If you are keeping your life savings in a bank account, you are literally losing money every single second you sleep. So stop saving a dying currency. Because as long as you trade time for paper... You are working for free.",
+  "visual_scenes": [
+    {
+      "start": 0,
+      "end": 8,
+      "filename": "vintage_1970s_home.mp4"
+    },
+    {
+      "start": 8,
+      "end": 25,
+      "filename": "money_printer_brrr.mp4"
+    },
+    {
+      "start": 25,
+      "end": 45,
+      "filename": "stock_market_crash_red.mp4"
+    },
+    {
+      "start": 45,
+      "end": 60,
+      "filename": "gold_bars_cinematic.mp4"
+    }
   ]
 }
