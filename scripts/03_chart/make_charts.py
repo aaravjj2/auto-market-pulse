@@ -1,234 +1,453 @@
 #!/usr/bin/env python3
-"""Generate mobile-readable charts (PNG) for story scenes.
+"""Generate mobile-readable charts using Manim with transparent background.
 
-Creates price candlestick PNGs, a small pct-change image, and a volume image.
-Saves metadata mapping charts to scene order.
+Creates price candlestick animations, percentage change charts, and volume charts
+with transparent background for compositing over background videos.
+
+Output: .mov files (ProRes 4444) or PNG image sequences with alpha channel.
 """
+from __future__ import annotations
+
 import argparse
 import json
 import os
+import sys
 from datetime import datetime
+from pathlib import Path
 
-import matplotlib.pyplot as plt
-import mplfinance as mpf
 import pandas as pd
 import numpy as np
 
+try:
+    from manim import (
+        config,
+        Scene,
+        Rectangle,
+        Text,
+        VGroup,
+        Line,
+        Axes,
+        ValueTracker,
+        Create,
+        FadeIn,
+        WHITE,
+        GREEN,
+        RED,
+        BLUE,
+        ORANGE,
+        UP,
+        DOWN,
+    )
+    # For transparent background in Manim
+    # Use None or config.background_color = None to get transparency
+    MANIM_AVAILABLE = True
+except ImportError:
+    MANIM_AVAILABLE = False
+    print("Warning: Manim not available. Install with: pip install manim", file=sys.stderr)
 
-def ensure_dir(path):
-    os.makedirs(path, exist_ok=True)
+
+# Module-level data storage for scenes (set before each render)
+_current_scene_data = {}
+
+def configure_manim_transparent(output_format: str = "mov"):
+    """Configure Manim for transparent background rendering.
+    
+    Args:
+        output_format: Either "mov" (ProRes 4444) or "png" (image sequence)
+    """
+    if not MANIM_AVAILABLE:
+        return
+    
+    # 9:16 vertical 1080x1920 format
+    config.pixel_width = 1080
+    config.pixel_height = 1920
+    config.frame_rate = 30
+    
+    # Set background to TRANSPARENT (None = transparent in Manim)
+    # This enables alpha channel output
+    config.background_color = None
+    
+    # Enable transparent rendering
+    config.transparent = True
+    
+    # Configure output format
+    if output_format.lower() == "png":
+        # PNG sequence with alpha
+        config.format = "png"
+    # mov format is default and supports transparency with ProRes 4444 codec
 
 
-def make_candlestick(df, symbol, outpath, figsize=(4.8, 8.533)):
-    dfc = df.copy()
-    dfc.index = pd.DatetimeIndex(dfc["timestamp"])
-    dfc = dfc[["open", "high", "low", "close", "volume"]]
-    # mobile-friendly tall layout and cleaner style
-    style = mpf.make_mpf_style(base_mpf_style="yahoo", rc={"font.size": 12})
-    # add a 20-period moving average and volume panel
-    try:
-        fig, axes = mpf.plot(dfc, type="candle", style=style, volume=True, mav=(20,), returnfig=True, figsize=figsize, show_nontrading=False)
-        # annotate a brief fact box: latest close and percent change
+class CandlestickChartScene(Scene):
+    """Manim scene for candlestick price chart with transparent background."""
+    
+    def construct(self):
+        # Get data from module-level store
+        if not _current_scene_data:
+            self.wait(1)
+            return
+        df = _current_scene_data.get('df')
+        symbol = _current_scene_data.get('symbol')
+        if df is None or symbol is None:
+            self.wait(1)
+            return
+        
+        df = df.copy()
+        df.index = pd.DatetimeIndex(df["timestamp"])
+        duration = 5.0
+        
+        # Create title with symbol and price info
         try:
-            last = float(dfc['close'].iloc[-1])
-            prev = float(dfc['close'].iloc[-2])
+            last = float(df['close'].iloc[-1])
+            prev = float(df['close'].iloc[-2])
             pct = (last / prev - 1.0) * 100
-            fact = f"{symbol} {last:.2f} ({pct:+.2f}%)"
+            title_text = f"{symbol} {last:.2f} ({pct:+.2f}%)"
         except Exception:
-            fact = symbol
-        fig.text(0.5, 0.96, fact, ha='center', va='top', fontsize=18, color='white', weight='bold', bbox=dict(facecolor='black', alpha=0.6, pad=6))
-        # a small facts line with highest-volume day info
-        try:
-            idxmax = dfc['volume'].idxmax()
-            vmax = dfc['volume'].max()
-            vfact = f"Highest vol: {idxmax.date()} ({int(vmax):,})"
-            fig.text(0.5, 0.92, vfact, ha='center', va='top', fontsize=12, color='white', bbox=dict(facecolor='black', alpha=0.45, pad=4))
-        except Exception:
-            pass
-        fig.savefig(outpath, dpi=150, bbox_inches='tight')
-        plt.close(fig)
-    except Exception:
-        # fallback to simple mplfinance save
-        mpf.plot(dfc, type="candle", style=style, volume=False, show_nontrading=False, savefig=dict(fname=outpath, dpi=150), figsize=figsize)
-
-    # Post-processing annotations: mark last MA crossover and volume spikes
-    try:
-        # compute moving averages directly
-        ma20 = dfc['close'].rolling(window=20, min_periods=1).mean()
-        ma50 = dfc['close'].rolling(window=50, min_periods=1).mean()
-        sig = np.sign(ma20 - ma50)
-        cross = np.where(np.diff(sig) != 0)[0]
-        if len(cross) > 0:
-            last_idx = cross[-1] + 1
-            dt = dfc.index[last_idx]
-            price = dfc['close'].iloc[last_idx]
-            ax_price = axes[0]
-            ax_price.annotate('MA crossover', xy=(dt, price), xytext=(dt, price * 1.02), arrowprops=dict(facecolor='yellow', shrink=0.05), color='yellow', fontsize=10, weight='bold')
-            # vertical line on both axes to highlight event
-            for ax in axes:
-                try:
-                    ax.axvline(dt, color='yellow', linestyle='--', linewidth=1, alpha=0.6)
-                except Exception:
-                    pass
-
-        # volume spikes: mark days where volume > 2x 20-day avg
-        vol20 = dfc['volume'].rolling(window=20, min_periods=1).mean()
-        spikes = dfc.index[(dfc['volume'] > 2 * vol20)]
-        if len(spikes) > 0:
-            for sp in spikes[-3:]:
-                for ax in axes[-1:]:
-                    try:
-                        ax.axvline(sp, color='red', linestyle=':', linewidth=1.2, alpha=0.7)
-                    except Exception:
-                        pass
-        # re-save the annotated figure (overwrite)
-        fig.savefig(outpath, dpi=150, bbox_inches='tight')
-        plt.close(fig)
-    except Exception:
-        # non-fatal
-        pass
-
-
-def make_pct_chart(df, symbol, outpath, days=5, figsize=(4.8, 2.5)):
-    sdf = df[df["symbol"] == symbol].sort_values("timestamp").tail(days)
-    if sdf.empty:
-        return
-    pct = (sdf["close"].pct_change() * 100).fillna(0)
-    plt.figure(figsize=figsize)
-    plt.plot(sdf["timestamp"], pct, marker="o", linewidth=2, color="#FF7F0E")
-    plt.fill_between(sdf["timestamp"], 0, pct, alpha=0.05, color="#FF7F0E")
-    plt.title(f"{symbol} % change (last {days} days)")
-    plt.ylabel("%")
-    plt.xticks(rotation=15)
-    plt.grid(True, alpha=0.25)
-    plt.tight_layout()
-    plt.savefig(outpath, dpi=150)
-    plt.close()
+            title_text = symbol
+        
+        title = Text(title_text, color=WHITE, font_size=48).to_edge(UP, buff=0.5)
+        self.play(FadeIn(title))
+        
+        # Create axes for the chart
+        if len(df) > 0:
+            date_range = len(df)
+            price_min = float(df[['low']].min().min())
+            price_max = float(df[['high']].max().max())
+            price_range = price_max - price_min if price_max > price_min else price_max * 0.1
+            
+            ax = Axes(
+                x_range=[0, date_range, max(1, date_range // 10)],
+                y_range=[price_min - price_range * 0.1, price_max + price_range * 0.1, price_range / 5],
+                x_length=9,
+                y_length=14,
+                axis_config={"color": WHITE, "stroke_width": 2},
+            ).shift(DOWN * 0.5)
+            
+            self.play(Create(ax))
+            
+            # Draw candlesticks
+            candles = VGroup()
+            sample_size = min(50, len(df))  # Limit to 50 candles for performance
+            step = max(1, len(df) // sample_size)
+            
+            for i in range(0, len(df), step):
+                row = df.iloc[i]
+                x_pos = i
+                open_price = float(row['open'])
+                close_price = float(row['close'])
+                high_price = float(row['high'])
+                low_price = float(row['low'])
+                
+                # Body
+                body_height = abs(close_price - open_price)
+                body_color = GREEN if close_price >= open_price else RED
+                body_y = (open_price + close_price) / 2
+                
+                body = Rectangle(
+                    width=0.15,
+                    height=ax.y_axis.unit_size * body_height / ax.y_range[2],
+                    fill_color=body_color,
+                    fill_opacity=1.0,
+                    stroke_color=body_color,
+                    stroke_width=1,
+                )
+                body.move_to(ax.coords_to_point(x_pos, body_y))
+                
+                # Wicks
+                wick_top = ax.coords_to_point(x_pos, high_price)
+                wick_bottom = ax.coords_to_point(x_pos, low_price)
+                wick = Line(wick_top, wick_bottom, color=body_color, stroke_width=2)
+                
+                candle = VGroup(body, wick)
+                candles.add(candle)
+            
+            self.play(Create(candles), run_time=min(duration - 2, 3.0))
+            self.wait(duration - 3.0)
+        else:
+            self.wait(duration)
 
 
-def make_volume_chart(df, symbol, outpath, days=30, figsize=(4.8, 2.5)):
-    sdf = df[df["symbol"] == symbol].sort_values("timestamp").tail(days)
-    if sdf.empty:
-        return
-    plt.figure(figsize=figsize)
-    plt.bar(sdf["timestamp"], sdf["volume"], color="#4C72B0")
-    # highlight spikes
-    avg = sdf["volume"].mean()
-    plt.axhline(avg, color='gray', linestyle='--', linewidth=1, alpha=0.6)
-    plt.title(f"{symbol} Volume (last {days} days)")
-    plt.xticks(rotation=15)
-    plt.tight_layout()
-    plt.savefig(outpath, dpi=150)
-    plt.close()
+class PercentChangeChartScene(Scene):
+    """Manim scene for percentage change chart."""
+    
+    def construct(self):
+        # Get data from module-level store
+        if not _current_scene_data:
+            self.wait(1)
+            return
+        df = _current_scene_data.get('df')
+        symbol = _current_scene_data.get('symbol')
+        days = _current_scene_data.get('days', 5)
+        if df is None or symbol is None:
+            self.wait(1)
+            return
+        
+        duration = 4.0
+        df_filtered = df[df["symbol"] == symbol].sort_values("timestamp").tail(days)
+        
+        if df_filtered.empty:
+            self.wait(duration)
+            return
+        
+        title = Text(f"{symbol} % Change", color=WHITE, font_size=40).to_edge(UP, buff=0.3)
+        self.play(FadeIn(title))
+        
+        pct = (df_filtered["close"].pct_change() * 100).fillna(0)
+        
+        if len(pct) > 1:
+            x_max = len(pct)
+            y_min = float(pct.min()) - 1
+            y_max = float(pct.max()) + 1
+            y_range = y_max - y_min if y_max > y_min else 2.0
+            
+            ax = Axes(
+                x_range=[0, x_max, 1],
+                y_range=[y_min, y_max, y_range / 4],
+                x_length=9,
+                y_length=10,
+                axis_config={"color": WHITE, "stroke_width": 2},
+            ).shift(DOWN * 0.3)
+            
+            self.play(Create(ax))
+            
+            # Draw line
+            points = [ax.coords_to_point(i, float(pct.iloc[i])) for i in range(len(pct))]
+            line = Line(points[0], points[0], color=ORANGE, stroke_width=4)
+            
+            for i in range(1, len(points)):
+                new_line = Line(points[i-1], points[i], color=ORANGE, stroke_width=4)
+                line = VGroup(line, new_line)
+            
+            self.play(Create(line), run_time=min(duration - 1.5, 2.5))
+            self.wait(duration - 2.5)
+        else:
+            self.wait(duration)
 
 
-def make_top_movers(df, outpath, top_n=5, figsize=(4.8, 2.0)):
-    # compute last-close percent change for each symbol
-    rows = []
-    for s in sorted(df['symbol'].unique()):
-        sdf = df[df['symbol'] == s].sort_values('timestamp')
-        if len(sdf) < 2:
-            continue
-        last = float(sdf['close'].iloc[-1])
-        prev = float(sdf['close'].iloc[-2])
-        pct = (last / prev - 1.0) * 100
-        avgvol = int(sdf['volume'].tail(30).mean() or 0)
-        rows.append((s, last, pct, avgvol))
-    if not rows:
-        return
-    rows = sorted(rows, key=lambda r: abs(r[2]), reverse=True)[:top_n]
-    # render a compact table
-    fig, ax = plt.subplots(figsize=figsize)
-    ax.axis('off')
-    collabels = ['Symbol', 'Close', '%', 'AvgVol']
-    table_vals = [[r[0], f"{r[1]:.2f}", f"{r[2]:+.2f}%", f"{r[3]:,}"] for r in rows]
-    table = ax.table(cellText=table_vals, colLabels=collabels, cellLoc='center', loc='center')
-    table.auto_set_font_size(False)
-    table.set_fontsize(10)
-    table.scale(1, 1.2)
-    fig.tight_layout()
-    fig.savefig(outpath, dpi=150, bbox_inches='tight')
-    plt.close(fig)
+class VolumeChartScene(Scene):
+    """Manim scene for volume chart."""
+    
+    def construct(self):
+        # Get data from module-level store
+        if not _current_scene_data:
+            self.wait(1)
+            return
+        df = _current_scene_data.get('df')
+        symbol = _current_scene_data.get('symbol')
+        days = _current_scene_data.get('days', 30)
+        if df is None or symbol is None:
+            self.wait(1)
+            return
+        
+        duration = 4.0
+        df_filtered = df[df["symbol"] == symbol].sort_values("timestamp").tail(days)
+        
+        if df_filtered.empty:
+            self.wait(duration)
+            return
+        
+        title = Text(f"{symbol} Volume", color=WHITE, font_size=40).to_edge(UP, buff=0.3)
+        self.play(FadeIn(title))
+        
+        volumes = df_filtered["volume"]
+        if len(volumes) > 1:
+            x_max = len(volumes)
+            y_max = float(volumes.max()) * 1.1
+            
+            ax = Axes(
+                x_range=[0, x_max, max(1, x_max // 5)],
+                y_range=[0, y_max, y_max / 5],
+                x_length=9,
+                y_length=10,
+                axis_config={"color": WHITE, "stroke_width": 2},
+            ).shift(DOWN * 0.3)
+            
+            self.play(Create(ax))
+            
+            # Draw bars
+            bars = VGroup()
+            bar_width = 0.6
+            sample_size = min(20, len(volumes))
+            step = max(1, len(volumes) // sample_size)
+            
+            for i in range(0, len(volumes), step):
+                vol = float(volumes.iloc[i])
+                bar = Rectangle(
+                    width=bar_width,
+                    height=ax.y_axis.unit_size * vol / ax.y_range[2],
+                    fill_color=BLUE,
+                    fill_opacity=0.7,
+                    stroke_color=BLUE,
+                )
+                bar.move_to(ax.coords_to_point(i, vol / 2))
+                bars.add(bar)
+            
+            self.play(Create(bars), run_time=min(duration - 1.5, 2.5))
+            self.wait(duration - 2.5)
+        else:
+            self.wait(duration)
+
+
+def render_manim_scene(scene_class, scene_kwargs: dict, output_path: str, output_format: str = "mov"):
+    """Render a Manim scene to file with transparent background.
+    
+    Args:
+        scene_class: Manim Scene class to render
+        scene_kwargs: Keyword arguments to store for scene access
+        output_path: Output file path
+        output_format: "mov" or "png"
+    """
+    if not MANIM_AVAILABLE:
+        raise ImportError("Manim is not available. Install with: pip install manim")
+    
+    # Configure for transparency BEFORE creating scene
+    configure_manim_transparent(output_format)
+    
+    # Store data in module-level variable (scenes access this in construct())
+    global _current_scene_data
+    _current_scene_data = scene_kwargs.copy()
+    
+    # Create scene instance and render
+    scene = scene_class()
+    scene.render()
+    
+    # Clean up data store
+    _current_scene_data = {}
+    
+    # Find the rendered file and move it to output_path
+    # Manim saves to media/videos/<module>/<quality>/<scene_name>.<ext>
+    media_root = Path("media/videos")
+    scene_name = scene_class.__name__
+    
+    if output_format == "mov":
+        pattern = f"*{scene_name}*.mov"
+    else:
+        pattern = f"*{scene_name}*.png"
+    
+    candidates = list(media_root.rglob(pattern))
+    if candidates:
+        latest = max(candidates, key=lambda p: p.stat().st_mtime)
+        output_path_obj = Path(output_path)
+        output_path_obj.parent.mkdir(parents=True, exist_ok=True)
+        
+        # For PNG sequences, need to handle directory
+        if output_format == "png" and latest.is_dir():
+            import shutil
+            if output_path_obj.exists():
+                shutil.rmtree(output_path_obj)
+            shutil.copytree(latest, output_path_obj)
+        else:
+            import shutil
+            shutil.copy(latest, output_path_obj)
+        
+        return str(output_path_obj.resolve())
+    else:
+        raise FileNotFoundError(f"Could not find rendered output for {scene_name}")
 
 
 def main(args):
-    ensure_dir(args.outdir)
+    if not MANIM_AVAILABLE:
+        print("Error: Manim is required but not installed.", file=sys.stderr)
+        print("Install with: pip install manim", file=sys.stderr)
+        sys.exit(1)
+    
+    os.makedirs(args.outdir, exist_ok=True)
     df = pd.read_csv(args.cache, parse_dates=["timestamp"]) if args.cache else None
+    
     with open(args.story) as f:
         story = json.load(f)
-    # optional plotly export
-    do_plotly = getattr(args, 'plotly', False)
-    plotly_files = []
-
-    # choose symbols: SPY, GLD, SLV, plus first other if available
+    
+    # Determine output format
+    output_format = getattr(args, 'format', 'mov').lower()
+    if output_format not in ['mov', 'png']:
+        output_format = 'mov'
+    
+    # Choose symbols
     symbols = ["SPY", "GLD", "SLV"]
     if df is not None:
         extra = [s for s in sorted(df["symbol"].unique()) if s not in symbols]
         if extra:
             symbols.append(extra[0])
-
-    chart_map = {"scenes": []}
+    
+    chart_map = {"scenes": [], "manim_clips": []}
     scene_idx = 1
     available = list(df["symbol"].unique()) if df is not None else symbols
+    
     for sym in [s for s in symbols if s in available][:4]:
-        price_out = os.path.join(args.outdir, f"scene_{scene_idx:02d}_{sym}_price.png")
-        make_candlestick(df[df["symbol"] == sym], sym, price_out)
-        chart_map["scenes"].append({"scene": scene_idx, "type": "price", "symbol": sym, "file": price_out})
+        if df is None:
+            continue
+            
+        sym_df = df[df["symbol"] == sym]
+        if sym_df.empty:
+            continue
+        
+        # Price chart
+        price_out = os.path.join(args.outdir, f"scene_{scene_idx:02d}_{sym}_price.{output_format}")
+        try:
+            render_manim_scene(
+                CandlestickChartScene,
+                {"df": sym_df, "symbol": sym},
+                price_out,
+                output_format
+            )
+            chart_map["scenes"].append({
+                "scene": scene_idx,
+                "type": "price",
+                "symbol": sym,
+                "file": price_out
+            })
+            chart_map["manim_clips"].append(price_out)
+        except Exception as e:
+            print(f"Error rendering price chart for {sym}: {e}", file=sys.stderr)
         scene_idx += 1
-
-        pct_out = os.path.join(args.outdir, f"scene_{scene_idx:02d}_{sym}_pct.png")
-        make_pct_chart(df, sym, pct_out)
-        chart_map["scenes"].append({"scene": scene_idx, "type": "pct", "symbol": sym, "file": pct_out})
+        
+        # Percent change chart
+        pct_out = os.path.join(args.outdir, f"scene_{scene_idx:02d}_{sym}_pct.{output_format}")
+        try:
+            render_manim_scene(
+                PercentChangeChartScene,
+                {"df": df, "symbol": sym, "days": 5},
+                pct_out,
+                output_format
+            )
+            chart_map["scenes"].append({
+                "scene": scene_idx,
+                "type": "pct",
+                "symbol": sym,
+                "file": pct_out
+            })
+            chart_map["manim_clips"].append(pct_out)
+        except Exception as e:
+            print(f"Error rendering pct chart for {sym}: {e}", file=sys.stderr)
         scene_idx += 1
-
-        vol_out = os.path.join(args.outdir, f"scene_{scene_idx:02d}_{sym}_vol.png")
-        make_volume_chart(df, sym, vol_out)
-        chart_map["scenes"].append({"scene": scene_idx, "type": "volume", "symbol": sym, "file": vol_out})
+        
+        # Volume chart
+        vol_out = os.path.join(args.outdir, f"scene_{scene_idx:02d}_{sym}_vol.{output_format}")
+        try:
+            render_manim_scene(
+                VolumeChartScene,
+                {"df": df, "symbol": sym, "days": 30},
+                vol_out,
+                output_format
+            )
+            chart_map["scenes"].append({
+                "scene": scene_idx,
+                "type": "volume",
+                "symbol": sym,
+                "file": vol_out
+            })
+            chart_map["manim_clips"].append(vol_out)
+        except Exception as e:
+            print(f"Error rendering volume chart for {sym}: {e}", file=sys.stderr)
         scene_idx += 1
-        # optional Plotly interactive export
-        if do_plotly:
-            try:
-                import plotly.graph_objects as go
-                import plotly.io as pio
-                sdf = df[df['symbol'] == sym].sort_values('timestamp')
-                if not sdf.empty:
-                    fig = go.Figure()
-                    fig.add_trace(go.Candlestick(x=sdf['timestamp'], open=sdf['open'], high=sdf['high'], low=sdf['low'], close=sdf['close'], name=f'{sym}'))
-                    fig.update_layout(title=f"{sym} price", xaxis_title='time', yaxis_title='price')
-                    pth = os.path.join(args.outdir, f"scene_{scene_idx-3:02d}_{sym}_interactive.html")
-                    pio.write_html(fig, file=pth, auto_open=False)
-                    plotly_files.append(pth)
-            except Exception:
-                pass
-
+    
+    # Write metadata
     meta_out = os.path.join(args.outdir, "chart_meta.json")
     with open(meta_out, "w") as f:
         json.dump(chart_map, f, indent=2)
-
-    # top movers summary image
-    top_out = os.path.join(args.outdir, "top_movers.png")
-    try:
-        make_top_movers(df, top_out)
-        chart_map['top_movers'] = top_out
-    except Exception:
-        pass
-
-    # write a simple facts.json with a few computed facts
-    facts = {}
-    try:
-        overall = df.groupby('symbol').apply(lambda g: float(g['close'].iloc[-1]))
-        facts['price_snapshot'] = overall.to_dict()
-    except Exception:
-        facts['price_snapshot'] = {}
-    facts_out = os.path.join(args.outdir, 'chart_facts.json')
-    with open(facts_out, 'w') as f:
-        json.dump(facts, f, indent=2)
-    chart_map['facts'] = facts_out
-    if do_plotly and plotly_files:
-        chart_map['plotly'] = plotly_files
-
-    print("Wrote charts to", args.outdir)
+    
+    print("Wrote Manim charts to", args.outdir)
     print("Meta:", meta_out)
+    print(f"Format: {output_format.upper()} with transparent background")
 
 
 if __name__ == "__main__":
@@ -236,6 +455,7 @@ if __name__ == "__main__":
     p.add_argument("--story", required=True, help="story JSON path")
     p.add_argument("--cache", required=True, help="cache CSV path")
     p.add_argument("--outdir", required=True, help="output directory for charts")
-    p.add_argument("--plotly", action="store_true", help="export interactive Plotly HTML charts")
+    p.add_argument("--format", default="mov", choices=["mov", "png"], 
+                   help="Output format: mov (ProRes 4444) or png (image sequence)")
     args = p.parse_args()
     main(args)

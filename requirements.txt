@@ -11,3 +11,5 @@ PyYAML
 pytest
 python-dotenv
 ffmpeg-python
+fredapi
+TTS

@@ -28,36 +28,84 @@ def run(cmd):
 
 
 def tts_save(text, out_wav, backend='auto'):
-    # Backend priority: pyttsx3 (offline), Coqui TTS (local), gTTS (online)
-    if backend in ('auto', 'pyttsx3'):
+    # Replace previous backends with Edge-TTS (async) per Architecture Section 7.2
+    # Hardcode production voice per spec: en-US-ChristopherNeural
+    voice = "en-US-ChristopherNeural"
+
+    import asyncio
+    try:
+        import edge_tts
+    except Exception as e:
+        raise RuntimeError(f"edge-tts package not available: {e}")
+
+    async def _synth_and_save(text, mp3_path, voice_name):
+        communicate = edge_tts.Communicate(text, voice=voice_name)
+        await communicate.save(mp3_path)
+
+    # edge-tts outputs MP3; synthesize then convert to WAV using ffmpeg
+    mp3_tmp = out_wav + ".edge.mp3"
+    try:
+        asyncio.run(_synth_and_save(text, mp3_tmp, voice))
+    except Exception as e:
+        # surface error clearly
+        raise RuntimeError(f"Edge-TTS synthesis failed: {e}")
+
+    # convert mp3 to wav
+    ffmpeg = get_ffmpeg()
+    ff = shlex.quote(ffmpeg)
+    cmd = f"{ff} -y -i {shlex.quote(mp3_tmp)} -ar 44100 -ac 2 {shlex.quote(out_wav)}"
+    run(cmd)
+    try:
+        os.remove(mp3_tmp)
+    except Exception:
+        pass
+
+
+def tts_save_via_http(text, out_wav, coqui_url):
+    """Try calling a local Coqui TTS HTTP service. Tries common endpoints."""
+    try:
+        import requests
+    except Exception:
+        raise RuntimeError("requests package required for HTTP Coqui TTS")
+
+    endpoints = [
+        f"{coqui_url.rstrip('/')}/api/tts",
+        f"{coqui_url.rstrip('/')}/tts",
+        f"{coqui_url.rstrip('/')}/api/generate",
+    ]
+
+    headers = {"Content-Type": "application/json"}
+    payload = {"text": text}
+
+    for ep in endpoints:
         try:
-            import pyttsx3
-
-            engine = pyttsx3.init()
-            engine.setProperty("rate", 150)
-            engine.save_to_file(text, out_wav)
-            engine.runAndWait()
-            return
-        except Exception:
-            if backend == 'pyttsx3':
-                raise
-            print("pyttsx3 unavailable, trying next backend")
-
-    if backend in ('auto', 'coqui'):
-        try:
-            # Coqui TTS (package `TTS`) — local, higher-quality models if installed
-            from TTS.api import TTS
-
-            # use the default local model (will download if first-run and internet available)
-            tts = TTS(list_models()[0]) if False else TTS("tts_models/en/ljspeech/tacotron2-DDC")
-            # synthesize to wav
-            tts.tts_to_file(text=text, file_path=out_wav)
-            return
+            print("Trying Coqui HTTP endpoint:", ep)
+            r = requests.post(ep, json=payload, headers=headers, timeout=20)
+            if r.status_code == 200:
+                # If response is audio bytes, save directly
+                content_type = r.headers.get('Content-Type', '')
+                if 'audio' in content_type or r.content.startswith(b"RIFF") or r.content.startswith(b"\x52\x49\x46\x46"):
+                    with open(out_wav, 'wb') as f:
+                        f.write(r.content)
+                    return True
+                # If JSON with base64 field
+                try:
+                    j = r.json()
+                    if isinstance(j, dict):
+                        for k in ('wav','audio','output'):
+                            if k in j and isinstance(j[k], str):
+                                import base64
+                                b = base64.b64decode(j[k])
+                                with open(out_wav, 'wb') as f:
+                                    f.write(b)
+                                return True
+                except Exception:
+                    pass
+            else:
+                print(f"Coqui endpoint {ep} returned status {r.status_code}")
         except Exception as e:
-            print("Coqui TTS unavailable or failed:", e)
-            if backend == 'coqui':
-                raise
-            print("falling back to gTTS")
+            print("Coqui HTTP attempt failed for", ep, "->", e)
+    return False
 
     # fallback: gTTS -> mp3 -> convert to wav via ffmpeg
     try:
@@ -148,7 +196,9 @@ def main(args):
     segments.append((intro_text, timing.get("intro_sec", 3)))
     # bullets
     for b in story.get("bullets", []):
-        segments.append((b.get("text", ""), timing.get("scene_sec", 4)))
+        # allow per-bullet duration via 'dur' (seconds); otherwise use scene_sec
+        dur = b.get("dur") if isinstance(b.get("dur"), (int, float)) else timing.get("scene_sec", 4)
+        segments.append((b.get("text", ""), dur))
     # outro
     segments.append(("End — Educational content. Not financial advice.", timing.get("outro_sec", 2)))
 
@@ -160,7 +210,18 @@ def main(args):
         wav = os.path.join(tmpdir, f"seg_{i:02d}.wav")
         wav_fixed = os.path.join(tmpdir, f"seg_{i:02d}.fixed.wav")
         print(f"Synthesizing segment {i}: {text[:80]}")
-        tts_save(text, wav)
+        # If a Coqui HTTP URL is provided, try it first when requested
+        used = False
+        if getattr(args, 'coqui_url', None) and args.backend in ('auto', 'coqui'):
+            try:
+                ok = tts_save_via_http(text, wav, args.coqui_url)
+                if ok:
+                    used = True
+            except Exception as e:
+                print('Coqui HTTP TTS attempt failed:', e)
+
+        if not used:
+            tts_save(text, wav, backend=args.backend)
         pad_or_trim(ffmpeg, wav, dur, wav_fixed)
         prepared.append(wav_fixed)
 
@@ -174,5 +235,6 @@ if __name__ == "__main__":
     p.add_argument("--timing", default="templates/video_timing.json")
     p.add_argument("--output", required=True)
     p.add_argument("--backend", choices=['auto','pyttsx3','coqui','gtts'], default='auto', help='TTS backend to prefer')
+    p.add_argument("--coqui-url", default=None, help='URL of local Coqui TTS HTTP server (e.g. http://localhost:5002)')
     args = p.parse_args()
     main(args)
