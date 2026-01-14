@@ -1,0 +1,11 @@
+# This file is used internally by FFMPEG.
+file 'file:/home/aarav/Social media faceless/media/videos/animate_scenes/1920p60/partial_movie_files/PurchasingPower/1544015774_3454905846_223132457.mp4'
+file 'file:/home/aarav/Social media faceless/media/videos/animate_scenes/1920p60/partial_movie_files/PurchasingPower/555675692_1424999325_4162464163.mp4'
+file 'file:/home/aarav/Social media faceless/media/videos/animate_scenes/1920p60/partial_movie_files/PurchasingPower/555675692_777241100_1947200120.mp4'
+file 'file:/home/aarav/Social media faceless/media/videos/animate_scenes/1920p60/partial_movie_files/PurchasingPower/555675692_3749842960_2230208083.mp4'
+file 'file:/home/aarav/Social media faceless/media/videos/animate_scenes/1920p60/partial_movie_files/PurchasingPower/555675692_1906709931_3001235574.mp4'
+file 'file:/home/aarav/Social media faceless/media/videos/animate_scenes/1920p60/partial_movie_files/PurchasingPower/555675692_2612249181_2047954384.mp4'
+file 'file:/home/aarav/Social media faceless/media/videos/animate_scenes/1920p60/partial_movie_files/PurchasingPower/555675692_2552766273_1241624111.mp4'
+file 'file:/home/aarav/Social media faceless/media/videos/animate_scenes/1920p60/partial_movie_files/PurchasingPower/555675692_89833976_2322389621.mp4'
+file 'file:/home/aarav/Social media faceless/media/videos/animate_scenes/1920p60/partial_movie_files/PurchasingPower/555675692_3371724677_2511738269.mp4'
+file 'file:/home/aarav/Social media faceless/media/videos/animate_scenes/1920p60/partial_movie_files/PurchasingPower/555675692_3899136764_1111462421.mp4'
