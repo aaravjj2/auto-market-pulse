@@ -7,6 +7,10 @@ __pycache__/
 *.py[cod]
 *.pyo
 *.pyd
+*.swp
+.Python
+
+# Virtual Environments
 env/
 .venv/
 venv/
@@ -23,9 +27,15 @@ dist/
 .vscode/
 .idea/
 
+# Jupyter
+.ipynb_checkpoints/
+
 # OS files
 .DS_Store
 Thumbs.db
 
 # Output folders
 output/
+
+# Local pip installs
+/home/*/.local/

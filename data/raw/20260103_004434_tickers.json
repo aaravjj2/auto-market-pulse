@@ -1,0 +1,53 @@
+{
+  "request_ts": "2026-01-03T00:44:33.452345-05:00",
+  "records": [
+    {
+      "timestamp": "2026-01-03T00:44:33.452345-05:00",
+      "symbol": "AAPL",
+      "close": 271.010009765625,
+      "pct_change": -0.3127,
+      "volume": 37822400,
+      "source": "yfinance"
+    },
+    {
+      "timestamp": "2026-01-03T00:44:33.452345-05:00",
+      "symbol": "GLD",
+      "close": 398.2799987792969,
+      "pct_change": 0.4971,
+      "volume": 10365900,
+      "source": "yfinance"
+    },
+    {
+      "timestamp": "2026-01-03T00:44:33.452345-05:00",
+      "symbol": "MSFT",
+      "close": 472.94000244140625,
+      "pct_change": -2.2083,
+      "volume": 25539600,
+      "source": "yfinance"
+    },
+    {
+      "timestamp": "2026-01-03T00:44:33.452345-05:00",
+      "symbol": "NVDA",
+      "close": 188.85000610351562,
+      "pct_change": 1.2601,
+      "volume": 147941400,
+      "source": "yfinance"
+    },
+    {
+      "timestamp": "2026-01-03T00:44:33.452345-05:00",
+      "symbol": "SLV",
+      "close": 65.75,
+      "pct_change": 2.0646,
+      "volume": 75098000,
+      "source": "yfinance"
+    },
+    {
+      "timestamp": "2026-01-03T00:44:33.452345-05:00",
+      "symbol": "SPY",
+      "close": 683.1699829101562,
+      "pct_change": 0.1833,
+      "volume": 89310400,
+      "source": "yfinance"
+    }
+  ]
+}

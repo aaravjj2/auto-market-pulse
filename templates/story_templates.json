@@ -1,0 +1,9 @@
+{
+  "market_pulse": {
+    "title": "Market Pulse — {date}",
+    "bullets": [
+      "{symbol} closed {pct:+.2f}% at ${close:.2f}",
+      "{symbol} had volume {vol_mult:.1f}x average"
+    ]
+  }
+}

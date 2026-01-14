@@ -1,0 +1,12 @@
+{
+  "palette": {
+    "up": "#2ca02c",
+    "down": "#d62728",
+    "neutral": "#7f7f7f"
+  },
+  "font": {
+    "family": "DejaVu Sans",
+    "title_size": 36,
+    "label_size": 20
+  }
+}

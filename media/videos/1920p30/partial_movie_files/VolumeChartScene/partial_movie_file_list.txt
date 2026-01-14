@@ -1,0 +1,5 @@
+# This file is used internally by FFMPEG.
+file 'file:/home/aarav/Social media faceless/auto-market-pulse/media/videos/1920p30/partial_movie_files/VolumeChartScene/1136779195_833162515_223132457.mov'
+file 'file:/home/aarav/Social media faceless/auto-market-pulse/media/videos/1920p30/partial_movie_files/VolumeChartScene/3919140940_3528297495_617504038.mov'
+file 'file:/home/aarav/Social media faceless/auto-market-pulse/media/videos/1920p30/partial_movie_files/VolumeChartScene/3919140940_2423539103_979464394.mov'
+file 'file:/home/aarav/Social media faceless/auto-market-pulse/media/videos/1920p30/partial_movie_files/VolumeChartScene/3919140940_3366045169_866179600.mov'
